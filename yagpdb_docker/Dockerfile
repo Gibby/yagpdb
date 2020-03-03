@@ -1,13 +1,17 @@
 FROM golang:stretch as builder
 
-WORKDIR $GOPATH/src
+ENV GOPATH /go
+ENV CGO_ENABLED 0
+ENV GOOS linux
+ENV GO111MODULE on
+
+WORKDIR $GOPATH
 
 
 # Uncomment during development
 # COPY . github.com/jonas747/yagpdb
 
-RUN CGO_ENABLED=0 GOOS=linux go get -v \
-  github.com/jonas747/yagpdb/cmd/yagpdb
+RUN go get -v github.com/jonas747/yagpdb/cmd/yagpdb
 
 FROM alpine:latest
 
@@ -23,11 +27,11 @@ RUN apk --no-cache add ca-certificates
 RUN apk --no-cache add ffmpeg
 
 # Handle templates for plugins automatically
-COPY --from=builder /go/src/github.com/jonas747/yagpdb/*/assets/*.html templates/plugins/
+COPY --from=builder /go/pkg/mod/github.com/jonas747/yagpdb*/*/assets/*.html templates/plugins/
 
-COPY --from=builder /go/src/github.com/jonas747/yagpdb/cmd/yagpdb/templates templates/
-COPY --from=builder /go/src/github.com/jonas747/yagpdb/cmd/yagpdb/posts posts/
-COPY --from=builder /go/src/github.com/jonas747/yagpdb/cmd/yagpdb/static static/
+COPY --from=builder /go/pkg/mod/github.com/jonas747/yagpdb*/cmd/yagpdb/templates templates/
+COPY --from=builder /go/pkg/mod/github.com/jonas747/yagpdb*/cmd/yagpdb/posts posts/
+COPY --from=builder /go/pkg/mod/github.com/jonas747/yagpdb*/cmd/yagpdb/static static/
 
 COPY --from=builder /go/bin/yagpdb .
 
@@ -39,4 +43,3 @@ ENV extra_flags ""
 
 # `exec` allows us to receive shutdown signals.
 CMD exec /app/yagpdb -all -pa $extra_flags
-

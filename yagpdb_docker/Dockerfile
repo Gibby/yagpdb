@@ -35,11 +35,5 @@ COPY --from=builder /go/pkg/mod/github.com/jonas747/yagpdb*/cmd/yagpdb/static st
 
 COPY --from=builder /go/bin/yagpdb .
 
-# add extra flags here when running YAGPDB
-# Set "-exthttps=true" if using a TLS-enabled proxy such as
-# jrcs/letsencrypt-nginx-proxy-companion
-# Set "-https=false" do disable https
-ENV extra_flags ""
-
-# `exec` allows us to receive shutdown signals.
-CMD exec /app/yagpdb -all -pa $extra_flags
+ENTRYPOINT ["/app/yagpdb"]
+CMD ["-all"]

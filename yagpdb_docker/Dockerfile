@@ -36,4 +36,4 @@ COPY --from=builder /go/pkg/mod/github.com/jonas747/yagpdb*/cmd/yagpdb/static st
 COPY --from=builder /go/bin/yagpdb .
 
 ENTRYPOINT ["/app/yagpdb"]
-CMD ["-all"]
+CMD ["-all", "-exthttps=true", "-https=false"]

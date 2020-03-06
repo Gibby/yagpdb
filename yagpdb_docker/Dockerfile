@@ -15,6 +15,8 @@ RUN go get -v github.com/jonas747/yagpdb/cmd/yagpdb
 
 FROM alpine:latest
 
+ENV GAUTH false
+
 WORKDIR /app
 VOLUME /app/soundboard \
   /app/cert
@@ -35,5 +37,7 @@ COPY --from=builder /go/pkg/mod/github.com/jonas747/yagpdb*/cmd/yagpdb/static st
 
 COPY --from=builder /go/bin/yagpdb .
 
-ENTRYPOINT ["/app/yagpdb"]
+COPY ./start.sh /app/start.sh
+
+ENTRYPOINT ["/app/start.sh"]
 CMD ["-all", "-exthttps=true", "-https=false"]

@@ -4,18 +4,19 @@ ENV GOPATH /go
 ENV CGO_ENABLED 0
 ENV GOOS linux
 ENV GO111MODULE on
+ENV VERSION v1.23.0
 
 WORKDIR $GOPATH
 
+RUN go get -v github.com/jonas747/yagpdb/cmd/yagpdb@"$VERSION"
 
-# Uncomment during development
-# COPY . github.com/jonas747/yagpdb
+RUN git clone https://github.com/jonas747/yagpdb.git && \
+    cd yagpdb && \
+    git checkout $VERSION && \
+    cp -r /go/yagpdb/cmd/yagpdb/static/vendor /go/pkg/mod/github.com/jonas747/yagpdb*/cmd/yagpdb/static/
 
-RUN go get -v github.com/jonas747/yagpdb/cmd/yagpdb
 
 FROM alpine:latest
-
-ENV GAUTH false
 
 WORKDIR /app
 VOLUME /app/soundboard \
@@ -39,5 +40,7 @@ COPY --from=builder /go/bin/yagpdb .
 
 COPY ./start.sh /app/start.sh
 
+ENV GAUTH false
+
 ENTRYPOINT ["/app/start.sh"]
-CMD ["-all", "-exthttps=true", "-https=false"]
+CMD ["/app/yagpdb", "-all", "-exthttps=true", "-https=false"]

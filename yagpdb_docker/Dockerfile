@@ -1,11 +1,15 @@
 FROM golang:stretch as builder
 
+ENV CGO_ENABLED 0
+ENV GOOS linux
+ENV GO111MODULE on
+
 # Uncomment during development
 COPY . /appbuild/yagpdb
 
 WORKDIR /appbuild/yagpdb/cmd/yagpdb
 
-RUN CGO_ENABLED=0 GOOS=linux go build -v
+RUN ./build.sh
 
 FROM alpine:latest
 
@@ -29,11 +33,8 @@ COPY --from=builder /appbuild/yagpdb/cmd/yagpdb/static static/
 
 COPY --from=builder /appbuild/yagpdb/cmd/yagpdb .
 
-# add extra flags here when running YAGPDB
-# Set "-exthttps=true" if using a TLS-enabled proxy such as
-# jrcs/letsencrypt-nginx-proxy-companion
-# Set "-https=false" do disable https
-ENV extra_flags ""
+COPY --from=builder /appbuild/yagpdb/yagpdb_docker/start.sh .
 
 # `exec` allows us to receive shutdown signals.
-CMD exec /app/yagpdb -all -pa $extra_flags
+ENTRYPOINT ["/app/start.sh"]
+CMD ["/app/yagpdb", "-all", "-exthttps=true", "-https=false"]

@@ -11,6 +11,7 @@ import (
 	"github.com/jonas747/discordgo"
 	"github.com/jonas747/dstate"
 	"github.com/jonas747/retryableredis"
+	"github.com/jonas747/yagpdb/analytics"
 	"github.com/jonas747/yagpdb/bot"
 	"github.com/jonas747/yagpdb/bot/eventsystem"
 	"github.com/jonas747/yagpdb/common"
@@ -414,9 +415,11 @@ func SendStreamingAnnouncement(config *Config, guild *dstate.GuildState, ms *dst
 		return
 	}
 
+	go analytics.RecordActiveUnit(guild.ID, &Plugin{}, "sent_streaming_announcement")
+
 	ctx := templates.NewContext(guild, nil, ms)
-	ctx.Data["URL"] = common.EscapeSpecialMentions(ms.PresenceGame.URL)
-	ctx.Data["url"] = common.EscapeSpecialMentions(ms.PresenceGame.URL)
+	ctx.Data["URL"] = ms.PresenceGame.URL
+	ctx.Data["url"] = ms.PresenceGame.URL
 	ctx.Data["Game"] = ms.PresenceGame.State
 	ctx.Data["StreamTitle"] = ms.PresenceGame.Details
 	ctx.Data["StreamPlatform"] = ms.PresenceGame.Name
@@ -427,9 +430,9 @@ func SendStreamingAnnouncement(config *Config, guild *dstate.GuildState, ms *dst
 		return
 	}
 
-	m, err := common.BotSession.ChannelMessageSend(config.AnnounceChannel, out)
-	if err == nil && ctx.DelResponse {
-		templates.MaybeScheduledDeleteMessage(guild.ID, config.AnnounceChannel, m.ID, ctx.DelResponseDelay)
+	m, err := common.BotSession.ChannelMessageSendComplex(config.AnnounceChannel, ctx.MessageSend(out))
+	if err == nil && ctx.CurrentFrame.DelResponse {
+		templates.MaybeScheduledDeleteMessage(guild.ID, config.AnnounceChannel, m.ID, ctx.CurrentFrame.DelResponseDelay)
 	}
 }
 
@@ -442,6 +445,8 @@ func GiveStreamingRole(guildID, memberID, streamingRole int64, currentUserRoles 
 
 	if !common.ContainsInt64Slice(currentUserRoles, streamingRole) {
 		err = common.BotSession.GuildMemberRoleAdd(guildID, memberID, streamingRole)
+		go analytics.RecordActiveUnit(guildID, &Plugin{}, "assigned_streaming_role")
+
 	}
 
 	if err != nil {
@@ -462,6 +467,8 @@ func RemoveStreamingRole(guildID, memberID int64, streamingRole int64, currentRo
 	if !common.ContainsInt64Slice(currentRoles, streamingRole) {
 		return
 	}
+
+	go analytics.RecordActiveUnit(guildID, &Plugin{}, "removed_streaming_role")
 
 	err := common.BotSession.GuildMemberRoleRemove(guildID, memberID, streamingRole)
 	if err != nil {

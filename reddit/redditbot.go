@@ -12,6 +12,7 @@ import (
 
 	"github.com/jonas747/discordgo"
 	"github.com/jonas747/go-reddit"
+	"github.com/jonas747/yagpdb/analytics"
 	"github.com/jonas747/yagpdb/common"
 	"github.com/jonas747/yagpdb/common/config"
 	"github.com/jonas747/yagpdb/common/mqueue"
@@ -186,7 +187,10 @@ func (p *PostHandlerImpl) handlePost(post *reddit.Link, filterGuild int64) error
 		if common.Statsd != nil {
 			go common.Statsd.Count("yagpdb.reddit.matches", 1, []string{"subreddit:" + post.Subreddit, "guild:" + strconv.FormatInt(item.GuildID, 10)}, 1)
 		}
+
+		go analytics.RecordActiveUnit(item.GuildID, &Plugin{}, "posted_reddit_message")
 	}
+
 	return nil
 }
 
@@ -306,7 +310,7 @@ func CreatePostMessage(post *reddit.Link) (string, *discordgo.MessageEmbed) {
 			// cross post was a link most likely
 			embed.Color = 0x718aed
 			embed.Description += parent.URL
-			if parent.Media.Type == "" && !parent.Spoiler {
+			if parent.Media.Type == "" && !parent.Spoiler && parent.PostHint == "image" {
 				embed.Image = &discordgo.MessageEmbedImage{
 					URL: parent.URL,
 				}
@@ -318,7 +322,7 @@ func CreatePostMessage(post *reddit.Link) (string, *discordgo.MessageEmbed) {
 		embed.Title = "New link post"
 		embed.Description += post.URL
 
-		if post.Media.Type == "" && !post.Spoiler {
+		if post.Media.Type == "" && !post.Spoiler && post.PostHint == "image" {
 			embed.Image = &discordgo.MessageEmbedImage{
 				URL: post.URL,
 			}
@@ -329,7 +333,7 @@ func CreatePostMessage(post *reddit.Link) (string, *discordgo.MessageEmbed) {
 		embed.Title += " [spoiler]"
 	}
 
-	plainMessage = common.EscapeMentionsFromOutsideSource(plainMessage)
+	plainMessage = plainMessage
 	return plainMessage, embed
 }
 

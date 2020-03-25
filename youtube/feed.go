@@ -11,6 +11,7 @@ import (
 	"github.com/jinzhu/gorm"
 	"github.com/jonas747/discordgo"
 	"github.com/jonas747/retryableredis"
+	"github.com/jonas747/yagpdb/analytics"
 	"github.com/jonas747/yagpdb/common"
 	"github.com/jonas747/yagpdb/common/mqueue"
 	"github.com/mediocregopher/radix/v3"
@@ -335,13 +336,20 @@ func (p *Plugin) handlePlaylistItemsResponse(resp *youtube.PlaylistItemListRespo
 }
 
 func (p *Plugin) sendNewVidMessage(guild, discordChannel string, channelTitle string, videoID string, mentionEveryone bool) {
-	content := common.EscapeMentionsFromOutsideSource(fmt.Sprintf("**%s** uploaded a new youtube video!\n%s", channelTitle, "https://www.youtube.com/watch?v="+videoID))
+	content := fmt.Sprintf("**%s** uploaded a new youtube video!\n%s", channelTitle, "https://www.youtube.com/watch?v="+videoID)
 	if mentionEveryone {
 		content += " @everyone"
 	}
 
 	parsedChannel, _ := strconv.ParseInt(discordChannel, 10, 64)
 	parsedGuild, _ := strconv.ParseInt(guild, 10, 64)
+
+	parseMentions := []discordgo.AllowedMentionType{}
+	if mentionEveryone {
+		parseMentions = []discordgo.AllowedMentionType{discordgo.AllowedMentionTyeEveryone}
+	}
+
+	go analytics.RecordActiveUnit(parsedGuild, p, "posted_youtube_message")
 
 	mqueue.QueueMessage(&mqueue.QueuedElement{
 		Guild:      parsedGuild,
@@ -350,6 +358,9 @@ func (p *Plugin) sendNewVidMessage(guild, discordChannel string, channelTitle st
 		SourceID:   "",
 		MessageStr: content,
 		Priority:   2,
+		AllowedMentions: discordgo.AllowedMentions{
+			Parse: parseMentions,
+		},
 	})
 }
 

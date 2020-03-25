@@ -592,8 +592,11 @@ func joinStrings(sep string, args ...interface{}) (string, error) {
 				}
 			}
 
-		case int, int32, uint32, int64, uint64:
+		case int, uint, int32, uint32, int64, uint64:
 			builder.WriteString(ToString(v))
+			
+		case fmt.Stringer:
+			builder.WriteString(t.String())
 
 		}
 
@@ -796,6 +799,28 @@ func ToDuration(from interface{}) time.Duration {
 	}
 }
 
+func ToRune(from interface{}) []rune {
+	switch t := from.(type) {
+	case int, int16, int32, int64, uint8, uint16, uint32, uint64, float32, float64:
+		return []rune(ToString(t))
+	case string:
+		return []rune(t)
+	default:
+		return nil
+	}
+}
+
+func ToByte(from interface{}) []byte {
+	switch t := from.(type) {
+	case int, int16, int32, int64, uint8, uint16, uint32, uint64, float32, float64:
+		return []byte(ToString(t))
+	case string:
+		return []byte(t)
+	default:
+		return nil
+	}
+}
+
 func tmplJson(v interface{}) (string, error) {
 	b, err := json.Marshal(v)
 	if err != nil {
@@ -919,16 +944,6 @@ func tmplNewDate(year, monthInt, day, hour, min, sec int, location ...string) (t
 	}
 
 	return time.Date(year, month, day, hour, min, sec, 0, loc), nil
-}
-
-func tmplEscapeHere(in string) string {
-	return common.EscapeEveryoneHere(in, false, true)
-}
-func tmplEscapeEveryone(in string) string {
-	return common.EscapeEveryoneHere(in, true, false)
-}
-func tmplEscapeEveryoneHere(in string) string {
-	return common.EscapeEveryoneHere(in, true, true)
 }
 
 func tmplHumanizeDurationHours(in time.Duration) string {

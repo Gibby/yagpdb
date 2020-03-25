@@ -1,20 +1,15 @@
 FROM golang:stretch as builder
 
-ENV GOPATH /go
 ENV CGO_ENABLED 0
 ENV GOOS linux
 ENV GO111MODULE on
-ENV VERSION v1.24.0
 
-WORKDIR $GOPATH
+# Uncomment during development
+COPY . /appbuild/yagpdb
 
-RUN go get -v github.com/jonas747/yagpdb/cmd/yagpdb@"$VERSION"
+WORKDIR /appbuild/yagpdb/cmd/yagpdb
 
-RUN git clone https://github.com/jonas747/yagpdb.git && \
-    cd yagpdb && \
-    git checkout $VERSION && \
-    cp -r /go/yagpdb/cmd/yagpdb/static/vendor /go/pkg/mod/github.com/jonas747/yagpdb*/cmd/yagpdb/static/
-
+RUN ./build.sh
 
 FROM alpine:latest
 
@@ -30,17 +25,16 @@ RUN apk --no-cache add ca-certificates
 RUN apk --no-cache add ffmpeg
 
 # Handle templates for plugins automatically
-COPY --from=builder /go/pkg/mod/github.com/jonas747/yagpdb*/*/assets/*.html templates/plugins/
+COPY --from=builder /appbuild/yagpdb/*/assets/*.html templates/plugins/
 
-COPY --from=builder /go/pkg/mod/github.com/jonas747/yagpdb*/cmd/yagpdb/templates templates/
-COPY --from=builder /go/pkg/mod/github.com/jonas747/yagpdb*/cmd/yagpdb/posts posts/
-COPY --from=builder /go/pkg/mod/github.com/jonas747/yagpdb*/cmd/yagpdb/static static/
+COPY --from=builder /appbuild/yagpdb/cmd/yagpdb/templates templates/
+COPY --from=builder /appbuild/yagpdb/cmd/yagpdb/posts posts/
+COPY --from=builder /appbuild/yagpdb/cmd/yagpdb/static static/
 
-COPY --from=builder /go/bin/yagpdb .
+COPY --from=builder /appbuild/yagpdb/cmd/yagpdb .
 
-COPY ./start.sh /app/start.sh
+COPY --from=builder /appbuild/yagpdb/yagpdb_docker/start.sh .
 
-ENV GAUTH false
-
+# `exec` allows us to receive shutdown signals.
 ENTRYPOINT ["/app/start.sh"]
 CMD ["/app/yagpdb", "-all", "-exthttps=true", "-https=false"]

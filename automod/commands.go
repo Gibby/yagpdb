@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/jonas747/yagpdb/bot/paginatedmessages"
+	"github.com/jonas747/yagpdb/common/featureflags"
 
 	"github.com/jonas747/dcmd"
 	"github.com/jonas747/discordgo"
@@ -44,6 +45,7 @@ func (p *Plugin) AddCommands() {
 
 			data.GS.UserCacheDel(CacheKeyRulesets)
 			data.GS.UserCacheDel(CacheKeyLists)
+			featureflags.MarkGuildDirty(data.GS.ID)
 
 			enabledStr := "enabled"
 			if !ruleset.Enabled {
@@ -116,14 +118,13 @@ func (p *Plugin) AddCommands() {
 				return nil, err
 			}
 
-			if len(entries) < 1 && p!=nil && p.LastResponse != nil { //Dont send No Results error on first execution
+			if len(entries) < 1 && p != nil && p.LastResponse != nil { //Dont send No Results error on first execution
 				return nil, paginatedmessages.ErrNoResults
 			}
 
 			out := &strings.Builder{}
 			out.WriteString("```\n")
 
-			
 			if len(entries) > 0 {
 				for _, v := range entries {
 					t := v.CreatedAt.UTC().Format("02 Jan 2006 15:04")
@@ -244,7 +245,7 @@ func (p *Plugin) AddCommands() {
 				return nil, err
 			}
 
-			if len(listViolations) < 1 && p!=nil && p.LastResponse != nil { //Dont send No Results error on first execution
+			if len(listViolations) < 1 && p != nil && p.LastResponse != nil { //Dont send No Results error on first execution
 				return nil, paginatedmessages.ErrNoResults
 			}
 
@@ -281,7 +282,7 @@ func (p *Plugin) AddCommands() {
 		RunFunc: func(parsed *dcmd.Data) (interface{}, error) {
 			ID := parsed.Args[0].Int()
 			rows, err := models.AutomodViolations(qm.Where("guild_id = ? AND id = ?", parsed.GS.ID, ID)).DeleteAll(context.Background(), common.PQ)
-			
+
 			if err != nil {
 				return nil, err
 			}
@@ -292,27 +293,27 @@ func (p *Plugin) AddCommands() {
 			return "👌", nil
 		},
 	}
-	
+
 	cmdClearV := &commands.YAGCommand{
 		CustomEnabled: true,
 		CmdCategory:   commands.CategoryModeration,
 		Name:          "ClearViolations",
-		Description:   "Clears Violations of specified user optionally filtered by Name, Min/Max age and other conditions. By default, more recent violations are preferentially cleared.",
+		Description:   "Clears Violations of specified user (or global if User ID = 0 or unspecified) optionally filtered by Name, Min/Max age and other conditions. By default, more recent violations are preferentially cleared. Maximum of 2000 can be cleared at a time.",
 		Aliases:       []string{"ClearV", "ClrViolations", "ClrV"},
-		RequiredArgs:  1,
 		Arguments: []*dcmd.ArgDef{
-			&dcmd.ArgDef{Name: "User", Type: dcmd.UserID},
+			&dcmd.ArgDef{Name: "User", Default: 0, Type: dcmd.UserID},
 			&dcmd.ArgDef{Name: "Violation Name", Type:dcmd.String},
 		},
 		ArgSwitches: []*dcmd.ArgDef{
 			&dcmd.ArgDef{Switch: "ma", Name: "Max Violation Age", Default: time.Duration(0), Type: &commands.DurationArg{}},
 			&dcmd.ArgDef{Switch: "minage", Name: "Min Violation Age", Default: time.Duration(0), Type: &commands.DurationArg{}},
-			&dcmd.ArgDef{Switch: "num", Name: "Max Violations Cleared", Default: 0, Type: dcmd.Int},
+			&dcmd.ArgDef{Switch: "num", Name: "Max Violations Cleared", Default: 2000, Type: &dcmd.IntArg{Min:0, Max: 2000}},
 			&dcmd.ArgDef{Switch: "old", Name: "Preferentially Clear Older Violations"},
-			&dcmd.ArgDef{Switch: "skip", Name: "Amount Skipped", Default: 0, Type: dcmd.Int},		
+			&dcmd.ArgDef{Switch: "skip", Name: "Amount Skipped", Default: 0, Type: dcmd.Int},
 		},
+		ArgumentCombos: [][]int{[]int{0, 1}, []int{0}, []int{1}, []int{}},
 		RequireDiscordPerms: []int64{discordgo.PermissionManageServer, discordgo.PermissionAdministrator, discordgo.PermissionBanMembers},
-		GuildScopeCooldown: 2,
+		GuildScopeCooldown: 5,
 		RunFunc: func(parsed *dcmd.Data) (interface{}, error) {
 			UserID := parsed.Args[0].Int64()
 			VName := parsed.Args[1].Str()
@@ -329,10 +330,14 @@ func (p *Plugin) AddCommands() {
 			if parsed.Switches["old"].Value != nil && parsed.Switches["old"].Value.(bool) {
 				order = "id asc"
 			}
-			
-			//Construct Query and Fetch Rows
-			qms := []qm.QueryMod{qm.Where("guild_id = ? AND user_id = ?", parsed.GS.ID, UserID), qm.OrderBy(order), qm.Offset(skip)}
 
+			//Construct Query and Fetch Rows
+			qms := []qm.QueryMod{qm.Where("guild_id = ?", parsed.GS.ID), qm.OrderBy(order), qm.Offset(skip), qm.Limit(limit)}
+			
+			if UserID != 0 {
+				qms = append(qms, qm.Where("user_id = ?", UserID))
+			}
+			
 			if VName != "" {
 				qms = append(qms, qm.Where("name = ?", VName))
 			}
@@ -345,15 +350,12 @@ func (p *Plugin) AddCommands() {
 				qms = append(qms, qm.Where("created_at < ?", time.Now().Add(-minAge)))
 			}
 
-			if limit > 0 {
-				qms = append(qms, qm.Limit(limit))
-			}
 
 			rows, err := models.AutomodViolations(qms...).AllG(context.Background())
 			if err != nil {
 				return nil, err
 			}
-			
+
 			//Delete Filtered rows.
 			cleared, err := rows.DeleteAllG(context.Background())
 			if err != nil {
@@ -363,7 +365,7 @@ func (p *Plugin) AddCommands() {
 			return fmt.Sprintf("%d Violations Cleared!!", cleared), nil
 		},
 	}
-	
+
 	container := commands.CommandSystem.Root.Sub("automod", "amod")
 	container.NotFound = commands.CommonContainerNotFoundHandler(container, "")
 

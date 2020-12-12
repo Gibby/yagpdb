@@ -153,6 +153,10 @@ func (p *Plugin) startVerificationProcess(conf *models.VerificationConfig, guild
 	}
 
 	// schedule the kick and warnings
+	err = p.clearScheduledEvents(context.Background(), gs.ID, ms.ID) //clear old scheduled events
+	if err != nil {
+		logger.WithError(err).WithField("guild", gs.ID).WithField("user", ms.ID).Error("failed clearing past scheduled warn/kick events.")
+	}
 	if conf.WarnUnverifiedAfter > 0 && conf.WarnMessage != "" {
 		scheduledevents2.ScheduleEvent("verification_user_warn", guildID, time.Now().Add(time.Minute*time.Duration(conf.WarnUnverifiedAfter)), evt)
 	}
@@ -186,20 +190,9 @@ func ScheduledEventMW(innerHandler func(ms *dstate.MemberState, guildID int64, c
 			return false, nil
 		}
 
-		gs := bot.State.Guild(true, evt.GuildID)
-		if gs == nil {
-			return false, nil
-		}
-
-		ms := gs.MemberCopy(true, userID)
-		if ms == nil {
-
-			if gs.IsAvailable(true) {
-				return false, nil // probably left
-			}
-
-			// unavailable, we might be starting up
-			return true, nil
+		ms, err := bot.GetMember(evt.GuildID, userID)
+		if err != nil {
+			return scheduledevents2.CheckDiscordErrRetry(err), errors.WithStackIf(err)
 		}
 
 		return innerHandler(ms, evt.GuildID, conf, data)

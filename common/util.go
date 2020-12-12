@@ -14,8 +14,8 @@ import (
 	"emperror.dev/errors"
 	"github.com/jonas747/discordgo"
 	"github.com/jonas747/dstate"
-	"github.com/jonas747/retryableredis"
 	"github.com/lib/pq"
+	"github.com/mediocregopher/radix/v3"
 	"github.com/sirupsen/logrus"
 )
 
@@ -43,7 +43,7 @@ func GetGuildsWithConnected(in []*discordgo.UserGuild) ([]*GuildWithConnected, e
 			Connected: false,
 		}
 
-		err := RedisPool.Do(retryableredis.Cmd(&out[i].Connected, "SISMEMBER", "connected_guilds", strconv.FormatInt(g.ID, 10)))
+		err := RedisPool.Do(radix.Cmd(&out[i].Connected, "SISMEMBER", "connected_guilds", strconv.FormatInt(g.ID, 10)))
 		if err != nil {
 			return nil, err
 		}
@@ -72,34 +72,6 @@ func SendTempMessage(session *discordgo.Session, duration time.Duration, cID int
 	}
 
 	DelayedMessageDelete(session, duration, cID, m.ID)
-}
-
-// GetGuildChannels returns the guilds channels either from cache or api
-func GetGuildChannels(guildID int64) (channels []*discordgo.Channel, err error) {
-	// Check cache first
-	err = GetCacheDataJson(KeyGuildChannels(guildID), &channels)
-	if err != nil {
-		channels, err = BotSession.GuildChannels(guildID)
-		if err == nil {
-			SetCacheDataJsonSimple(KeyGuildChannels(guildID), channels)
-		}
-	}
-
-	return
-}
-
-// GetGuild returns the guild from guildid either from cache or api
-func GetGuild(guildID int64) (guild *discordgo.Guild, err error) {
-	// Check cache first
-	err = GetCacheDataJson(KeyGuild(guildID), &guild)
-	if err != nil {
-		guild, err = BotSession.Guild(guildID)
-		if err == nil {
-			SetCacheDataJsonSimple(KeyGuild(guildID), guild)
-		}
-	}
-
-	return
 }
 
 func RandomAdjective() string {
@@ -519,19 +491,19 @@ func ErrPQIsUniqueViolation(err error) bool {
 
 func GetJoinedServerCount() (int64, error) {
 	var count int64
-	err := RedisPool.Do(retryableredis.Cmd(&count, "SCARD", "connected_guilds"))
+	err := RedisPool.Do(radix.Cmd(&count, "SCARD", "connected_guilds"))
 	return count, err
 }
 
 func BotIsOnGuild(guildID int64) (bool, error) {
 	isOnGuild := false
-	err := RedisPool.Do(retryableredis.FlatCmd(&isOnGuild, "SISMEMBER", "connected_guilds", guildID))
+	err := RedisPool.Do(radix.FlatCmd(&isOnGuild, "SISMEMBER", "connected_guilds", guildID))
 	return isOnGuild, err
 }
 
 func GetActiveNodes() ([]string, error) {
 	var nodes []string
-	err := RedisPool.Do(retryableredis.FlatCmd(&nodes, "ZRANGEBYSCORE", "dshardorchestrator_nodes_z", time.Now().Add(-time.Minute).Unix(), "+inf"))
+	err := RedisPool.Do(radix.FlatCmd(&nodes, "ZRANGEBYSCORE", "dshardorchestrator_nodes_z", time.Now().Add(-time.Minute).Unix(), "+inf"))
 	return nodes, err
 }
 
@@ -577,4 +549,18 @@ func IsOwner(userID int64) bool {
 
 var AllowedMentionsParseUsers = discordgo.AllowedMentions{
 	Parse: []discordgo.AllowedMentionType{discordgo.AllowedMentionTypeUsers},
+}
+
+func LogLongCallTime(treshold time.Duration, isErr bool, logMsg string, f func()) {
+	started := time.Now()
+	f()
+	elapsed := time.Since(started)
+
+	if elapsed > treshold {
+		if isErr {
+			logrus.Error(logMsg + elapsed.String())
+		} else {
+			logrus.Warn(logMsg + elapsed.String())
+		}
+	}
 }

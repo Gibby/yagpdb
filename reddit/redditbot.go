@@ -16,15 +16,12 @@ import (
 	"github.com/jonas747/yagpdb/common"
 	"github.com/jonas747/yagpdb/common/config"
 	"github.com/jonas747/yagpdb/common/mqueue"
+	"github.com/jonas747/yagpdb/feeds"
 	"github.com/jonas747/yagpdb/reddit/models"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
 	"github.com/volatiletech/sqlboiler/queries/qm"
 	"golang.org/x/oauth2"
-)
-
-const (
-	MaxPostsHourFast = 200
-	MaxPostsHourSlow = 200
 )
 
 var (
@@ -32,6 +29,9 @@ var (
 	confClientSecret = config.RegisterOption("yagpdb.reddit.clientsecret", "Client Secret for the reddit api application", "")
 	confRedirectURI  = config.RegisterOption("yagpdb.reddit.redirect", "Redirect URI for the reddit api application", "")
 	confRefreshToken = config.RegisterOption("yagpdb.reddit.refreshtoken", "RefreshToken for the reddit api application, you need to ackquire this manually, should be set to permanent", "")
+
+	confMaxPostsHourFast = config.RegisterOption("yagpdb.reddit.fast_max_posts_hour", "Max posts per hour per guild for fast feed", 60)
+	confMaxPostsHourSlow = config.RegisterOption("yagpdb.reddit.slow_max_posts_hour", "Max posts per hour per guild for slow feed", 120)
 
 	feedLock sync.Mutex
 	fastFeed *PostFetcher
@@ -184,10 +184,7 @@ func (p *PostHandlerImpl) handlePost(post *reddit.Link, filterGuild int64) error
 
 		mqueue.QueueMessage(qm)
 
-		if common.Statsd != nil {
-			go common.Statsd.Count("yagpdb.reddit.matches", 1, []string{"subreddit:" + post.Subreddit, "guild:" + strconv.FormatInt(item.GuildID, 10)}, 1)
-		}
-
+		feeds.MetricPostedMessages.With(prometheus.Labels{"source": "reddit"}).Inc()
 		go analytics.RecordActiveUnit(item.GuildID, &Plugin{}, "posted_reddit_message")
 	}
 
@@ -206,9 +203,9 @@ OUTER:
 			}
 		}
 
-		limit := MaxPostsHourFast
+		limit := confMaxPostsHourFast.GetInt()
 		if p.Slow {
-			limit = MaxPostsHourSlow
+			limit = confMaxPostsHourSlow.GetInt()
 		}
 
 		// apply ratelimiting

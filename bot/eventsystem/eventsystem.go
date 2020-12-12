@@ -12,6 +12,7 @@ import (
 	"github.com/jonas747/discordgo"
 	"github.com/jonas747/dstate"
 	"github.com/jonas747/yagpdb/common"
+	"github.com/jonas747/yagpdb/common/featureflags"
 	"github.com/sirupsen/logrus"
 )
 
@@ -33,10 +34,11 @@ type Handler struct {
 }
 
 type EventData struct {
-	EvtInterface interface{}
-	Type         Event
-	ctx          context.Context
-	Session      *discordgo.Session
+	EvtInterface      interface{}
+	Type              Event
+	ctx               context.Context
+	Session           *discordgo.Session
+	GuildFeatureFlags []string
 
 	GS *dstate.GuildState // Guaranteed to be available for guild events, except creates and deletes
 	cs *dstate.ChannelState
@@ -54,8 +56,8 @@ func NewEventData(session *discordgo.Session, t Event, evtInterface interface{})
 		cancelled:    new(int32),
 	}
 }
-func (evt *EventData) Cancel() {
-	atomic.StoreInt32(evt.cancelled, 1)
+func (e *EventData) Cancel() {
+	atomic.StoreInt32(e.cancelled, 1)
 }
 
 func (e *EventData) Context() context.Context {
@@ -73,6 +75,11 @@ func (e *EventData) WithContext(ctx context.Context) *EventData {
 	return cop
 }
 
+// HasFeatureFlag returns true if the guild the event came from has the provided feature flag
+func (e *EventData) HasFeatureFlag(flag string) bool {
+	return common.ContainsStringSlice(e.GuildFeatureFlags, flag)
+}
+
 // EmitEvent emits an event
 func EmitEvent(data *EventData, evt Event) {
 	h := handlers[evt]
@@ -80,16 +87,18 @@ func EmitEvent(data *EventData, evt Event) {
 	runEvents(h[0], data)
 	runEvents(h[1], data)
 
-	go func() {
-		defer func() {
-			if err := recover(); err != nil {
-				stack := string(debug.Stack())
-				logrus.WithField(logrus.ErrorKey, err).WithField("evt", data.Type.String()).Error("Recovered from panic in event handler\n" + stack)
-			}
-		}()
+	if len(h[2]) > 0 {
+		go func() {
+			defer func() {
+				if err := recover(); err != nil {
+					stack := string(debug.Stack())
+					logrus.WithField(logrus.ErrorKey, err).WithField("evt", data.Type.String()).Error("Recovered from panic in event handler\n" + stack)
+				}
+			}()
 
-		runEvents(h[2], data)
-	}()
+			runEvents(h[2], data)
+		}()
+	}
 }
 
 func runEvents(h []*Handler, data *EventData) {
@@ -319,7 +328,7 @@ func InitWorkers(totalShards int) {
 
 	workers = make([]chan *EventData, totalShards)
 	for i, _ := range workers {
-		workers[i] = make(chan *EventData, 5000)
+		workers[i] = make(chan *EventData, 1000)
 		go eventWorker(workers[i])
 	}
 }
@@ -341,6 +350,11 @@ func handleEvent(evtData *EventData) {
 			if evtData.GS == nil && evtData.Type != EventGuildCreate && evtData.Type != EventGuildDelete {
 				logrus.Debugf("Skipped event as guild state info is not available: %v, %d", evtData.Type, guildEvt.GetGuildID())
 				return
+			}
+
+			flags, err := featureflags.RetryGetGuildFlags(id)
+			if err == nil {
+				evtData.GuildFeatureFlags = flags
 			}
 		}
 	}

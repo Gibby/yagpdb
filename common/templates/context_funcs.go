@@ -48,6 +48,7 @@ func (c *Context) tmplSendDM(s ...interface{}) string {
 	return ""
 }
 
+// ChannelArg converts a verity of types of argument into a channel, verifying that it exists
 func (c *Context) ChannelArg(v interface{}) int64 {
 
 	c.GS.RLock()
@@ -57,6 +58,60 @@ func (c *Context) ChannelArg(v interface{}) int64 {
 	if v == nil && c.CurrentFrame.CS != nil {
 		// No channel passed, assume current channel
 		return c.CurrentFrame.CS.ID
+	}
+
+	verifiedExistence := false
+	var cid int64
+	if v != nil {
+		switch t := v.(type) {
+		case int, int64:
+			// Channel id passed
+			cid = ToInt64(t)
+		case string:
+			parsed, err := strconv.ParseInt(t, 10, 64)
+			if err == nil {
+				// Channel id passed in string format
+				cid = parsed
+			} else {
+				// Channel name, look for it
+				for _, v := range c.GS.Channels {
+					if strings.EqualFold(t, v.Name) && v.Type == discordgo.ChannelTypeGuildText {
+						cid = v.ID
+						verifiedExistence = true
+						break
+					}
+				}
+			}
+		}
+	}
+
+	if !verifiedExistence {
+		// Make sure the channel is part of the guild
+		for k, _ := range c.GS.Channels {
+			if k == cid {
+				verifiedExistence = true
+				break
+			}
+		}
+	}
+
+	if !verifiedExistence {
+		return 0
+	}
+
+	return cid
+}
+
+// ChannelArgNoDM is the same as ChannelArg but will not accept DM channels
+func (c *Context) ChannelArgNoDM(v interface{}) int64 {
+
+	c.GS.RLock()
+	defer c.GS.RUnlock()
+
+	// Look for the channel
+	if v == nil && c.CurrentFrame.CS != nil {
+		// No channel passed, assume current channel
+		v = c.CurrentFrame.CS.ID
 	}
 
 	verifiedExistence := false
@@ -190,13 +245,17 @@ func (c *Context) sendNestedTemplate(channel interface{}, dm bool, name string, 
 	if err != nil {
 		return "", err
 	}
-	return m.ID, err
+
+	if m != nil {
+		return m.ID, err
+	}
+	return "", err
 }
 
 func (c *Context) tmplSendMessage(filterSpecialMentions bool, returnID bool) func(channel interface{}, msg interface{}) interface{} {
 	parseMentions := []discordgo.AllowedMentionType{discordgo.AllowedMentionTypeUsers}
 	if !filterSpecialMentions {
-		parseMentions = append(parseMentions, discordgo.AllowedMentionTypeRoles, discordgo.AllowedMentionTyeEveryone)
+		parseMentions = append(parseMentions, discordgo.AllowedMentionTypeRoles, discordgo.AllowedMentionTypeEveryone)
 	}
 
 	return func(channel interface{}, msg interface{}) interface{} {
@@ -223,6 +282,9 @@ func (c *Context) tmplSendMessage(filterSpecialMentions bool, returnID bool) fun
 			msgSend.Embed = typedMsg
 		case *discordgo.MessageSend:
 			msgSend = typedMsg
+			msgSend.AllowedMentions = discordgo.AllowedMentions{
+				Parse: parseMentions,
+			}
 		default:
 			msgSend.Content = fmt.Sprint(msg)
 		}
@@ -243,7 +305,7 @@ func (c *Context) tmplEditMessage(filterSpecialMentions bool) func(channel inter
 			return "", ErrTooManyAPICalls
 		}
 
-		cid := c.ChannelArg(channel)
+		cid := c.ChannelArgNoDM(channel)
 		if cid == 0 {
 			return "", errors.New("Unknown channel")
 		}
@@ -283,12 +345,12 @@ func (c *Context) tmplEditMessage(filterSpecialMentions bool) func(channel inter
 
 func (c *Context) tmplMentionEveryone() string {
 	c.CurrentFrame.MentionEveryone = true
-	return " @everyone "
+	return "@everyone"
 }
 
 func (c *Context) tmplMentionHere() string {
 	c.CurrentFrame.MentionHere = true
-	return " @here "
+	return "@here"
 }
 
 func (c *Context) tmplMentionRoleID(roleID interface{}) string {
@@ -318,7 +380,7 @@ func (c *Context) tmplMentionRoleID(roleID interface{}) string {
 	}
 
 	c.CurrentFrame.MentionRoles = append(c.CurrentFrame.MentionRoles, role)
-	return " <@&" + discordgo.StrID(role) + "> "
+	return "<@&" + discordgo.StrID(role) + ">"
 }
 
 func (c *Context) tmplMentionRoleName(role string) string {
@@ -341,7 +403,7 @@ func (c *Context) tmplMentionRoleName(role string) string {
 		return "(role not found)"
 	}
 
-	return " <@&" + discordgo.StrID(found.ID) + "> "
+	return "<@&" + discordgo.StrID(found.ID) + ">"
 }
 
 func (c *Context) tmplHasRoleID(roleID interface{}) bool {
@@ -498,34 +560,20 @@ func (c *Context) tmplGiveRoleName(target interface{}, name string) string {
 		return ""
 	}
 
-	role := int64(0)
-	c.GS.RLock()
-	for _, r := range c.GS.Guild.Roles {
-		if strings.EqualFold(r.Name, name) {
-			role = r.ID
+	role := c.findRoleByName(name)
+	if role == nil {
+		return "no role by the name of " + name + " found"
+	}
 
-			// Maybe save a api request
-			ms := c.GS.Member(false, targetID)
-			hasRole := false
-			if ms != nil {
-				hasRole = common.ContainsInt64Slice(ms.Roles, role)
-			}
-
-			if hasRole {
-				c.GS.RUnlock()
-				return ""
-			}
-
-			break
+	// Maybe save a api request
+	ms := c.GS.Member(false, targetID)
+	if ms != nil {
+		if common.ContainsInt64Slice(ms.Roles, role.ID) {
+			return ""
 		}
 	}
-	c.GS.RUnlock()
 
-	if role == 0 {
-		return ""
-	}
-
-	common.BotSession.GuildMemberRoleAdd(c.GS.ID, targetID, role)
+	common.BotSession.GuildMemberRoleAdd(c.GS.ID, targetID, role.ID)
 
 	return ""
 }
@@ -649,6 +697,36 @@ func (c *Context) tmplAddRoleID(role interface{}) (string, error) {
 	return "", nil
 }
 
+func (c *Context) tmplAddRoleName(name string) (string, error) {
+	if c.IncreaseCheckGenericAPICall() {
+		return "", ErrTooManyAPICalls
+	}
+
+	if c.MS == nil {
+		return "", nil
+	}
+
+	role := int64(0)
+	c.GS.RLock()
+	for _, r := range c.GS.Guild.Roles {
+		if strings.EqualFold(r.Name, name) {
+			role = r.ID
+			break
+		}
+	}
+	c.GS.RUnlock()
+
+	if role == 0 {
+		return "", errors.New("No Role with name " + name + " found")
+	}
+
+	if err := common.AddRoleDS(c.MS, role); err != nil {
+		return "", err
+	}
+
+	return "", nil
+}
+
 func (c *Context) tmplRemoveRoleID(role interface{}, optionalArgs ...interface{}) (string, error) {
 	if c.IncreaseCheckGenericAPICall() {
 		return "", ErrTooManyAPICalls
@@ -677,6 +755,49 @@ func (c *Context) tmplRemoveRoleID(role interface{}, optionalArgs ...interface{}
 	return "", nil
 }
 
+func (c *Context) tmplRemoveRoleName(name string, optionalArgs ...interface{}) (string, error) {
+	if c.IncreaseCheckGenericAPICall() {
+		return "", ErrTooManyAPICalls
+	}
+
+	delay := 0
+	if len(optionalArgs) > 0 {
+		delay = tmplToInt(optionalArgs[0])
+	}
+
+	if c.MS == nil {
+		return "", nil
+	}
+
+	role := c.findRoleByName(name)
+	if role == nil {
+		return "", errors.New("No Role with name " + name + " found")
+	}
+
+	if delay > 0 {
+		scheduledevents2.ScheduleRemoveRole(context.Background(), c.GS.ID, c.MS.ID, role.ID, time.Now().Add(time.Second*time.Duration(delay)))
+	} else {
+		if err := common.RemoveRoleDS(c.MS, role.ID); err != nil {
+			return "", err
+		}
+	}
+
+	return "", nil
+}
+
+func (c *Context) findRoleByName(name string) *discordgo.Role {
+	c.GS.RLock()
+	defer c.GS.RUnlock()
+
+	for _, r := range c.GS.Guild.Roles {
+		if strings.EqualFold(r.Name, name) {
+			return r
+		}
+	}
+
+	return nil
+}
+
 func (c *Context) tmplDelResponse(args ...interface{}) string {
 	dur := 10
 	if len(args) > 0 {
@@ -700,7 +821,7 @@ func (c *Context) tmplDelTrigger(args ...interface{}) string {
 }
 
 func (c *Context) tmplDelMessage(channel, msgID interface{}, args ...interface{}) string {
-	cID := c.ChannelArg(channel)
+	cID := c.ChannelArgNoDM(channel)
 	if cID == 0 {
 		return ""
 	}
@@ -782,7 +903,7 @@ func (c *Context) tmplGetMessage(channel, msgID interface{}) (*discordgo.Message
 		return nil, ErrTooManyAPICalls
 	}
 
-	cID := c.ChannelArg(channel)
+	cID := c.ChannelArgNoDM(channel)
 	if cID == 0 {
 		return nil, nil
 	}
@@ -811,7 +932,7 @@ func (c *Context) tmplGetMember(target interface{}) (*discordgo.Member, error) {
 	return member.DGoCopy(), nil
 }
 
-func (c *Context) tmplGetChannel(channel interface{}) (*dstate.ChannelState, error) {
+func (c *Context) tmplGetChannel(channel interface{}) (*CtxChannel, error) {
 
 	if c.IncreaseCheckGenericAPICall() {
 		return nil, ErrTooManyAPICalls
@@ -828,8 +949,7 @@ func (c *Context) tmplGetChannel(channel interface{}) (*dstate.ChannelState, err
 		return nil, errors.New("Channel not in state")
 	}
 
-	return cstate, nil
-
+	return CtxChannelFromCS(cstate), nil
 }
 
 func (c *Context) tmplAddReactions(values ...reflect.Value) (reflect.Value, error) {
@@ -1005,7 +1125,7 @@ func (c *Context) tmplEditChannelName(channel interface{}, newName string) (stri
 		return "", ErrTooManyCalls
 	}
 
-	cID := c.ChannelArg(channel)
+	cID := c.ChannelArgNoDM(channel)
 	if cID == 0 {
 		return "", errors.New("Unknown channel")
 	}
@@ -1023,7 +1143,7 @@ func (c *Context) tmplEditChannelTopic(channel interface{}, newTopic string) (st
 		return "", ErrTooManyCalls
 	}
 
-	cID := c.ChannelArg(channel)
+	cID := c.ChannelArgNoDM(channel)
 	if cID == 0 {
 		return "", errors.New("Unknown channel")
 	}

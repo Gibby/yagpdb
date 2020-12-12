@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/jonas747/discordgo"
+	"github.com/jonas747/dstate"
 	"github.com/jonas747/yagpdb/bot"
 	"github.com/jonas747/yagpdb/common"
 	"github.com/jonas747/yagpdb/common/scheduledevents2"
@@ -131,14 +132,14 @@ func (s *SetupSession) handleMessageSetupStateChannel(m *discordgo.Message) {
 		return
 	}
 
-	perms, err := gs.MemberPermissions(true, targetChannel, s.AuthorID)
+	hasPerms, err := bot.AdminOrPermMS(targetChannel, dstate.MSFromDGoMember(gs, m.Member), discordgo.PermissionSendMessages)
 	if err != nil {
 		s.sendMessage("Failed retrieving your pems, check with bot owner")
 		logger.WithError(err).WithField("guild", gs.ID).Error("failed calculating permissions")
 		return
 	}
 
-	if (perms & discordgo.PermissionSendMessages) == 0 {
+	if !hasPerms {
 		s.sendMessage("You don't have permissions to send messages there, please pick another channel")
 		return
 	}
@@ -265,7 +266,7 @@ func (s *SetupSession) Finish() {
 		return
 	}
 
-	err = AddReactions(m.ChannelID, m.MessageID)
+	err = AddReactions(m.ChannelID, m.MessageID, m.MaxParticipants > 0)
 	if err != nil {
 		m.DeleteG(context.Background())
 		s.abortError("failed adding reactions", err)
@@ -361,10 +362,16 @@ const (
 	EmojiWaitlist   = "🕐"
 )
 
-var EventReactions = []string{EmojiJoining, EmojiNotJoining, EmojiWaitlist, EmojiMaybe}
+var EventReactionsWithLimit = []string{EmojiJoining, EmojiNotJoining, EmojiWaitlist, EmojiMaybe}
+var EventReactionsNoLimit = []string{EmojiJoining, EmojiNotJoining, EmojiMaybe}
 
-func AddReactions(channelID, messageID int64) error {
-	for _, r := range EventReactions {
+func AddReactions(channelID, messageID int64, isLimit bool) error {
+	list := EventReactionsNoLimit
+	if isLimit {
+		list = EventReactionsWithLimit
+	}
+
+	for _, r := range list {
 		err := common.BotSession.MessageReactionAdd(channelID, messageID, r)
 		if err != nil {
 			return err

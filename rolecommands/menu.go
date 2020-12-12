@@ -96,6 +96,7 @@ func cmdFuncRoleMenuCreate(parsed *dcmd.Data) (interface{}, error) {
 	model.R = model.R.NewStruct()
 	model.R.RoleGroup = group
 
+	ClearRolemenuCacheGS(parsed.GS)
 	resp, err := NextRoleMenuSetupStep(parsed.Context(), model, true)
 	updateSetupMessage(parsed.Context(), model, resp)
 	return nil, err
@@ -141,6 +142,7 @@ func UpdateMenu(parsed *dcmd.Data, menu *models.RoleMenu) (interface{}, error) {
 	if resp != "" {
 		createSetupMessage(parsed.Context(), menu, resp, true)
 	}
+	ClearRolemenuCacheGS(parsed.GS)
 	return nil, err
 }
 
@@ -180,6 +182,7 @@ OUTER:
 
 		rm.State = RoleMenuStateDone
 		rm.UpdateG(ctx, boil.Infer())
+		ClearRolemenuCache(rm.GuildID)
 
 		flagHelp := StrFlags(rm)
 		return fmt.Sprintf("Done setting up! You can delete all the messages now (except for the menu itself)\n\nFlags:\n%s%s", flagHelp, extra), nil
@@ -190,6 +193,7 @@ OUTER:
 
 	totalCommands := len(commands) - rm.SkipAmount
 	resp = fmt.Sprintf("[%d/%d]\n", numDone, totalCommands)
+	ClearRolemenuCache(rm.GuildID)
 
 	return resp + "React with the emoji for the role command: `" + nextCmd.Name + "`\nNote: The bot has to be on the server where the emoji is from, otherwise it won't be able to use it", nil
 }
@@ -248,6 +252,20 @@ func ContinueRoleMenuSetup(ctx context.Context, rm *models.RoleMenu, emoji *disc
 			}
 		}
 
+		err = common.BotSession.MessageReactionAdd(rm.ChannelID, rm.MessageID, emoji.APIName())
+		if err != nil {
+			code, _ := common.DiscordError(err)
+			switch code {
+			case discordgo.ErrCodeUnknownEmoji:
+				return "I do not have access to that emoji, i can only use emojis from servers im on.", nil
+			case discordgo.ErrCodeMissingAccess, discordgo.ErrCodeMissingPermissions:
+				return "I do not have permissions to add reactions here, please give me that permission to continue the setup.", nil
+			default:
+				logger.WithError(err).WithField("emoji", emoji.APIName()).Error("Failed reacting")
+				return "An unknown error occured, please retry adding that emoji", nil
+			}
+		}
+
 		model := &models.RoleMenuOption{
 			RoleMenuID:    rm.MessageID,
 			RoleCommandID: rm.NextRoleCommandID,
@@ -261,12 +279,7 @@ func ContinueRoleMenuSetup(ctx context.Context, rm *models.RoleMenu, emoji *disc
 
 		err = model.InsertG(ctx, boil.Infer())
 		if err != nil {
-			return "Failed inserting option", err
-		}
-
-		err = common.BotSession.MessageReactionAdd(rm.ChannelID, rm.MessageID, emoji.APIName())
-		if err != nil {
-			logger.WithError(err).WithField("emoji", emoji.APIName()).Error("Failed reacting")
+			return "Failed inserting option into the database, please retry adding the emoji.", err
 		}
 
 		model.R = model.R.NewStruct()
@@ -282,7 +295,15 @@ func ContinueRoleMenuSetup(ctx context.Context, rm *models.RoleMenu, emoji *disc
 		if rm.OwnMessage {
 			err = UpdateRoleMenuMessage(ctx, rm)
 			if err != nil {
-				return "Failed updating message", err
+				ClearRolemenuCache(rm.GuildID)
+
+				code, _ := common.DiscordError(err)
+				switch code {
+				case discordgo.ErrCodeMissingAccess, discordgo.ErrCodeMissingPermissions:
+					return "I do not have permissions to update the menu message, please give me the proper permissions for me to update the menu message.", nil
+				default:
+					return "An error occured updating the menu message, use the `rolemenu update <id>` command to manually update the message", err
+				}
 			}
 		}
 	}
@@ -333,16 +354,18 @@ func findOptionFromEmoji(emoji *discordgo.Emoji, opts []*models.RoleMenuOption) 
 }
 
 func handleReactionAddRemove(evt *eventsystem.EventData) {
-	emoji, _, gID, uID, mID, raAdd := getReactionDetails(evt)
-	if uID == common.BotUser.ID {
+	emoji, _, _, uID, mID, raAdd := getReactionDetails(evt)
+	if uID == common.BotUser.ID || evt.GS == nil {
 		return
 	}
 
-	menu, err := FindRolemenuFull(evt.Context(), mID, gID)
+	menu, err := GetRolemenuCached(evt.Context(), evt.GS, mID)
 	if err != nil {
-		if err != sql.ErrNoRows {
-			logger.WithError(err).Error("RoleCommandsMenu: Failed finding menu")
-		}
+		logger.WithError(err).Error("RoleCommandsMenu: Failed finding menu")
+		return
+	}
+
+	if menu == nil {
 		return
 	}
 
@@ -628,6 +651,7 @@ func cmdFuncRoleMenuRemove(data *dcmd.Data) (interface{}, error) {
 	if err != nil {
 		return nil, err
 	}
+	ClearRolemenuCacheGS(data.GS)
 
 	return "Deleted. The bot will no longer listen for reactions on this message, you can even make another menu on it.", nil
 }
@@ -651,6 +675,8 @@ func cmdFuncRoleMenuEditOption(data *dcmd.Data) (interface{}, error) {
 		return "", err
 	}
 
+	ClearRolemenuCacheGS(data.GS)
+
 	createSetupMessage(data.Context(), menu, "React on the emoji for the option you want to change", true)
 	return nil, nil
 }
@@ -673,6 +699,7 @@ func cmdFuncRoleMenuComplete(data *dcmd.Data) (interface{}, error) {
 	if err != nil {
 		return nil, err
 	}
+	ClearRolemenuCacheGS(data.GS)
 
 	return "Menu marked as done", nil
 }
@@ -697,6 +724,7 @@ func MenuReactedNotDone(ctx context.Context, rm *models.RoleMenu, emoji *discord
 		if err != nil {
 			return "", err
 		}
+		ClearRolemenuCache(rm.GuildID)
 
 		return "Editing `" + option.R.RoleCommand.Name + "`, select the new emoji for it", nil
 	case RoleMenuStateEditingOptionReplacing:
@@ -723,6 +751,7 @@ func MenuReactedNotDone(ctx context.Context, rm *models.RoleMenu, emoji *discord
 
 		rm.State = RoleMenuStateDone
 		rm.UpdateG(ctx, boil.Whitelist("state"))
+		ClearRolemenuCache(rm.GuildID)
 
 		go common.BotSession.MessageReactionAdd(rm.ChannelID, rm.MessageID, emoji.APIName())
 

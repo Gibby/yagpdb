@@ -56,6 +56,12 @@ func tmplCArg(typ string, name string, opts ...interface{}) (*dcmd.ArgDef, error
 		} else {
 			def.Type = dcmd.Int
 		}
+	case "float":
+		if len(opts) >= 2 {
+			def.Type = &dcmd.FloatArg{Min: templates.ToFloat64(opts[0]), Max: templates.ToFloat64(opts[1])}
+		} else {
+			def.Type = dcmd.Float
+		}
 	case "duration":
 		if len(opts) >= 2 {
 			def.Type = &commands.DurationArg{Min: time.Duration(templates.ToInt64(opts[0])), Max: time.Duration(templates.ToInt64(opts[1]))}
@@ -88,8 +94,6 @@ func tmplExpectArgs(ctx *templates.Context) interface{} {
 
 		result.defs = args
 
-		ctxMember := ctx.MS
-
 		msg := ctx.Msg
 		stripped := ctx.Data["StrippedMsg"].(string)
 		split := dcmd.SplitArgs(stripped)
@@ -100,9 +104,6 @@ func tmplExpectArgs(ctx *templates.Context) interface{} {
 			return result, errors.WithMessage(err, "tmplExpectArgs")
 		}
 
-		dcmdData.MsgStrippedPrefix = stripped
-		dcmdData = dcmdData.WithContext(context.WithValue(dcmdData.Context(), commands.CtxKeyMS, ctxMember))
-
 		// attempt to parse them
 		err = dcmd.ParseArgDefs(args, numRequired, nil, dcmdData, split)
 		if err != nil {
@@ -112,6 +113,7 @@ func tmplExpectArgs(ctx *templates.Context) interface{} {
 				ctx.FixedOutput = err.Error() + "\nUsage: `" + (*dcmd.StdHelpFormatter).ArgDefLine(nil, args, numRequired) + "`"
 			}
 		}
+
 		result.parsed = dcmdData.Args
 		return result, err
 	}
@@ -129,7 +131,11 @@ func (pa *ParsedArgs) Get(index int) interface{} {
 
 	switch pa.parsed[index].Def.Type.(type) {
 	case *dcmd.IntArg:
-		return pa.parsed[index].Int()
+		i := pa.parsed[index]
+		if i.Value == nil {
+			return nil
+		}
+		return i.Int()
 	case *dcmd.ChannelArg:
 		i := pa.parsed[index].Value
 		if i == nil {
@@ -137,10 +143,7 @@ func (pa *ParsedArgs) Get(index int) interface{} {
 		}
 
 		c := i.(*dstate.ChannelState)
-		c.Owner.RLock()
-		cop := c.DGoCopy()
-		c.Owner.RUnlock()
-		return cop
+		return templates.CtxChannelFromCSLocked(c)
 	case *commands.MemberArg:
 		i := pa.parsed[index].Value
 		if i == nil {
@@ -641,7 +644,8 @@ type LightDBEntry struct {
 
 func ToLightDBEntry(m *models.TemplatesUserDatabase) (*LightDBEntry, error) {
 	var dst interface{}
-	err := msgpack.Unmarshal(m.ValueRaw, &dst)
+	dec := newDecoder(bytes.NewBuffer(m.ValueRaw))
+	err := dec.Decode(&dst)
 	if err != nil {
 		return nil, err
 	}
@@ -667,6 +671,57 @@ func ToLightDBEntry(m *models.TemplatesUserDatabase) (*LightDBEntry, error) {
 	entry.User.ID = entry.UserID
 
 	return entry, nil
+}
+
+func newDecoder(buf *bytes.Buffer) *msgpack.Decoder {
+	dec := msgpack.NewDecoder(buf)
+
+	dec.SetDecodeMapFunc(func(d *msgpack.Decoder) (interface{}, error) {
+		n, err := d.DecodeMapLen()
+		if err != nil {
+			return nil, err
+		}
+
+		isStringKeysOnly := true
+		mi := make(map[interface{}]interface{}, n)
+		ms := make(map[string]interface{})
+
+		for i := 0; i < n; i++ {
+			mk, err := d.DecodeInterface()
+			if err != nil {
+				return nil, err
+			}
+
+			mv, err := d.DecodeInterface()
+			if err != nil {
+				return nil, err
+			}
+
+			// if the map only has string keys, use a map[string]interface{}
+			if isStringKeysOnly {
+				if s, ok := mk.(string); ok {
+					// so far only string keys
+					ms[s] = mv
+				} else {
+					// copy over the map to the interface{} keyed one
+					isStringKeysOnly = false
+					for jk, jv := range ms {
+						mi[jk] = jv
+					}
+					mi[mk] = mv
+				}
+			} else {
+				mi[mk] = mv
+			}
+		}
+		if isStringKeysOnly {
+			return ms, nil
+		}
+
+		return mi, nil
+	})
+
+	return dec
 }
 
 func tmplResultSetToLightDBEntries(ctx *templates.Context, gs *dstate.GuildState, rs []*models.TemplatesUserDatabase) []*LightDBEntry {
